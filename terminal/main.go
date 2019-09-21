@@ -1,6 +1,7 @@
 package main
 
 import (
+	"flag"
 	"fmt"
 	"io"
 	"math/rand"
@@ -17,24 +18,26 @@ func main() {
 
 	var rows, cols int
 
-	if len(os.Args) > 1 {
-		grid1, rows, cols = loadSeed(os.Args[1])
-		if grid1 == nil {
-			fmt.Printf("unable to load seed from file %s, randomizing\n", os.Args[1])
-		}
-	}
+	var seedFile string
 
-	if grid1 == nil {
-		rows = 80
-		cols = 150
-		grid1 = randSeed(rows, cols)
-	}
+	var tickRate time.Duration
+
+	flag.IntVar(&rows, "r", 50, "number of rows for the game of life")
+	flag.IntVar(&cols, "c", 180, "number of columns for the game of life")
+	flag.StringVar(&seedFile, "sf", "", "seed file to load seed from")
+	flag.DurationVar(&tickRate, "t", 100*time.Millisecond, "amount of time to take between ticks")
+
+	fmt.Println(rows, cols, tickRate)
+
+	flag.Parse()
+
+	grid1 = make([]bool, rows*cols)
 
 	grid2 := make([]bool, rows*cols)
 
 	latest, other := grid1, grid2
 
-	ticker := time.Tick(200 * time.Millisecond)
+	ticker := time.Tick(tickRate)
 
 	drawGrid(latest, rows, cols)
 
