@@ -12,8 +12,6 @@ import (
 
 func main() {
 
-	rand.Seed(time.Now().UnixNano())
-
 	var grid1 []bool
 
 	var rows, cols int
@@ -23,15 +21,25 @@ func main() {
 	var tickRate time.Duration
 
 	flag.IntVar(&rows, "r", 50, "number of rows for the game of life")
-	flag.IntVar(&cols, "c", 180, "number of columns for the game of life")
+	flag.IntVar(&cols, "c", 50, "number of columns for the game of life")
 	flag.StringVar(&seedFile, "sf", "", "seed file to load seed from")
 	flag.DurationVar(&tickRate, "t", 100*time.Millisecond, "amount of time to take between ticks")
 
-	fmt.Println(rows, cols, tickRate)
-
 	flag.Parse()
 
-	grid1 = make([]bool, rows*cols)
+	if seedFile != "" {
+		grid1, rows, cols = loadSeed(seedFile)
+		if grid1 == nil {
+			fmt.Printf("unable to load seed from file %s\n", seedFile)
+		}
+	}
+
+	if grid1 == nil {
+		rand.Seed(time.Now().UnixNano())
+		grid1 = randSeed(rows, cols)
+	}
+
+	fmt.Println(rows, cols, tickRate)
 
 	grid2 := make([]bool, rows*cols)
 
