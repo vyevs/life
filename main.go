@@ -3,14 +3,23 @@ package main
 import (
 	"flag"
 	"fmt"
+	"image/color"
 	"io"
+	"log"
 	"math/rand"
 	"os"
-	"strings"
 	"time"
+
+	"github.com/faiface/pixel"
+	"github.com/faiface/pixel/pixelgl"
+	"golang.org/x/image/colornames"
 )
 
 func main() {
+	pixelgl.Run(run)
+}
+
+func run() {
 
 	var grid1 []bool
 
@@ -20,10 +29,13 @@ func main() {
 
 	var tickRate time.Duration
 
-	flag.IntVar(&rows, "r", 50, "number of rows for the game of life")
-	flag.IntVar(&cols, "c", 100, "number of columns for the game of life")
-	flag.StringVar(&seedFile, "sf", "", "seed file to load seed from")
-	flag.DurationVar(&tickRate, "t", 100*time.Millisecond, "amount of time to take between ticks")
+	var cellSizePixels int
+
+	flag.IntVar(&rows, "rows", 200, "number of rows for the game of life")
+	flag.IntVar(&cols, "cols", 200, "number of columns for the game of life")
+	flag.IntVar(&cellSizePixels, "cellSize", 5, "dimensions of each cell in pixels")
+	flag.StringVar(&seedFile, "seedFile", "", "seed file to load seed from")
+	flag.DurationVar(&tickRate, "tickRate", 100*time.Millisecond, "amount of time to take between ticks")
 
 	flag.Parse()
 
@@ -45,16 +57,47 @@ func main() {
 
 	latest, other := grid1, grid2
 
-	ticker := time.Tick(tickRate)
+	window, err := pixelgl.NewWindow(pixelgl.WindowConfig{
+		Title: "Life",
+		Bounds: pixel.Rect{
+			Min: pixel.Vec{
+				X: 0,
+				Y: 0,
+			},
+			Max: pixel.Vec{
+				X: float64(rows * cellSizePixels),
+				Y: float64(cols * cellSizePixels),
+			},
+		},
+		VSync: true,
+	})
 
-	drawGrid(latest, rows, cols)
-
-	for range ticker {
-		doTurn(latest, other, rows, cols)
-		latest, other = other, latest
-		drawGrid(latest, rows, cols)
+	if err != nil {
+		log.Fatal(err)
 	}
 
+	monitor := pixelgl.PrimaryMonitor()
+
+	x, y := monitor.Size()
+
+	fmt.Printf("Monitor size: %fx%f\n", x, y)
+	fmt.Printf("Refresh rate: %f\n", pixelgl.PrimaryMonitor().RefreshRate())
+
+	ticker := time.Tick(tickRate)
+
+	for range ticker {
+		if window.Closed() {
+			break
+		}
+
+		drawGrid(latest, rows, cols, cellSizePixels, window)
+
+		window.Update()
+
+		doTurn(latest, other, rows, cols)
+
+		latest, other = other, latest
+	}
 }
 
 func randSeed(rows, cols int) []bool {
@@ -67,23 +110,69 @@ func randSeed(rows, cols int) []bool {
 	return out
 }
 
-func drawGrid(grid []bool, rows, cols int) {
-	var buf strings.Builder
-	for i := 0; i < rows; i++ {
-		for j := 0; j < cols; j++ {
-			pos := i*cols + j
+// don't make a new pixel.PictureData every draw
+var picDataInit bool
+var picData pixel.PictureData
 
-			if grid[pos] {
-				buf.WriteRune('█')
-			} else {
-				buf.WriteRune(' ')
+func drawGrid(grid []bool, rows, cols, cellSizePixels int, window *pixelgl.Window) {
+	window.Clear(colornames.Black)
+
+	if !picDataInit {
+		picData = pixel.PictureData{
+			Pix:    make([]color.RGBA, len(grid)*cellSizePixels*cellSizePixels),
+			Stride: cols * cellSizePixels,
+			Rect: pixel.Rect{
+				Min: pixel.Vec{
+					X: 0,
+					Y: 0,
+				},
+				Max: pixel.Vec{
+					X: float64(rows * cellSizePixels),
+					Y: float64(cols * cellSizePixels),
+				},
+			},
+		}
+		picDataInit = true
+	}
+
+	for i, cell := range grid {
+		// this is the upper left pixel of the cell in (x, y) coordinates
+		verticalOffset := (i / cols) * cellSizePixels
+		horizontalOffset := (i % cols) * cellSizePixels
+
+		// this is the cell's flat location of the upper left pixel
+		upperLeftLinear := verticalOffset*cols*cellSizePixels + horizontalOffset
+
+		var cellColor color.RGBA
+
+		if cell {
+			cellColor = color.RGBA{
+				R: uint8(rand.Intn(256)),
+				G: uint8(rand.Intn(256)),
+				B: uint8(rand.Intn(256)),
+				A: 255,
+			}
+		} else {
+			cellColor = colornames.Black
+		}
+
+		for right := 0; right < cellSizePixels; right++ {
+			for down := 0; down < cellSizePixels; down++ {
+				pixIdx := upperLeftLinear + down*cols*cellSizePixels + right
+
+				//fmt.Println(pixIdx)
+
+				picData.Pix[pixIdx] = cellColor
 			}
 		}
-		buf.WriteRune('\n')
-	}
-	buf.WriteString("\n\n")
 
-	fmt.Println(buf.String())
+		//os.Exit(1)
+
+	}
+
+	sprite := pixel.NewSprite(&picData, picData.Bounds())
+
+	sprite.Draw(window, pixel.IM.Moved(window.Bounds().Center()))
 }
 
 func doTurn(from, to []bool, rows, cols int) {
@@ -253,6 +342,7 @@ func doTurn(from, to []bool, rows, cols int) {
 	}
 }
 
+// DOES NOT CURRENTLY WORK CORRECTLY
 // EXPERIMENTAL for speedup, might not actually be that much faster than original
 // writes the state resulting from from into to
 // stride is the number of columns each row has
