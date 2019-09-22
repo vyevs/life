@@ -45,6 +45,9 @@ var (
 	// changeLists[i] contains the cell positions that changed state in moving from step i -> i + 1
 	changeLists       [][]vec2
 	lastChangeListIdx int
+
+	// change of a cell being alive from the start is 1 / aliveRate
+	aliveRate int
 )
 
 type vec2 struct {
@@ -111,6 +114,7 @@ func run() {
 	var lastPaused time.Time
 	var lastRightPress time.Time
 	var lastLeftPress time.Time
+	var lastShiftPress time.Time
 
 	for !window.Closed() {
 
@@ -127,8 +131,17 @@ func run() {
 
 		if window.Pressed(pixelgl.KeyLeft) && paused && time.Since(lastLeftPress) >= tickRate {
 			lastLeftPress = time.Now()
-			reverseChange()
 
+			reverseChange()
+		}
+
+		if window.Pressed(pixelgl.KeyLeftShift) && time.Since(lastShiftPress) >= tickRate {
+			lastShiftPress = time.Now()
+
+			seedGrid()
+
+			lastChangeListIdx = -1
+			changeLists = changeLists[:0]
 		}
 
 		select {
@@ -146,11 +159,13 @@ func run() {
 		window.Update()
 	}
 
+	fmt.Printf("average do turn time: %s\n", totalDoTurnTime/time.Duration(calls))
+
 }
 
 func seedGrid() {
 	for i := range grid1 {
-		grid1[i] = rand.Intn(3) == 1
+		grid1[i] = rand.Intn(aliveRate) == 1
 	}
 }
 
@@ -207,9 +222,13 @@ func draw(window *pixelgl.Window) {
 	sprite.Draw(window, pixel.IM.Moved(window.Bounds().Center()))
 }
 
+var totalDoTurnTime time.Duration
+var calls int
+
 func doTurn() {
+	calls++
 	defer func(start time.Time) {
-		fmt.Printf("doTurn took %s\n", time.Since(start))
+		totalDoTurnTime += time.Since(start)
 	}(time.Now())
 
 	// try to apply already saved changes to go forward
@@ -225,85 +244,6 @@ func doTurn() {
 	}
 
 	changeList := make([]vec2, 0, 512)
-
-	for i, row := range grid1Rows {
-		for j, cell := range row {
-
-			var aliveNeighbors int
-
-			//fmt.Printf("cell (%d, %d)\n", i, j)
-
-			for rowOffset := -1; rowOffset <= 1; rowOffset++ {
-				for colOffset := -1; colOffset <= 1; colOffset++ {
-
-					if rowOffset == 0 && colOffset == 0 {
-						continue
-					}
-
-					neighborRow := i + rowOffset + rows
-
-					if neighborRow >= rows {
-						neighborRow -= rows
-						if neighborRow >= rows {
-							neighborRow -= rows
-						}
-					}
-
-					neighborCol := j + colOffset + cols
-
-					for neighborCol >= cols {
-						neighborCol -= cols
-						for neighborCol >= cols {
-							neighborCol -= cols
-						}
-					}
-
-					//fmt.Printf("neighbor (%d, %d)\n", neighborRow, neighborCol)
-
-					if grid1Rows[neighborRow][neighborCol] {
-						aliveNeighbors++
-					}
-				}
-			}
-
-			grid2Rows[i][j] = aliveNeighbors == 3 || (cell && aliveNeighbors == 2)
-
-			if grid2Rows[i][j] != cell {
-				changeList = append(changeList, vec2{x: i, y: j})
-			}
-		}
-	}
-
-	fmt.Printf("changes: %d\n", len(changeList))
-
-	changeLists = append(changeLists, changeList)
-	lastChangeListIdx++
-
-	grid1, grid2 = grid2, grid1
-	grid1Rows, grid2Rows = grid2Rows, grid1Rows
-}
-
-func doTurn2() {
-	defer func(start time.Time) {
-		fmt.Printf("doTurn2 took %s\n", time.Since(start))
-	}(time.Now())
-
-	// try to apply already saved changes to go forward
-	if lastChangeListIdx < len(changeLists)-1 {
-
-		// increment first because we want the changes to get us to the next state
-		// since lastChangeListIdx contains the changes that got us to the current state
-		lastChangeListIdx++
-
-		applyChange(grid1Rows, changeLists[lastChangeListIdx])
-
-		return
-	}
-
-	changeList := make([]vec2, 0, 512)
-
-	// keep a running track of alive neighbors as we slide the window
-	//var aliveNeighbors int
 
 	for i, row := range grid1Rows {
 
@@ -347,7 +287,7 @@ func doTurn2() {
 		}
 	}
 
-	fmt.Printf("changes: %d\n", len(changeList))
+	//fmt.Printf("changes: %d\n", len(changeList))
 
 	changeLists = append(changeLists, changeList)
 	lastChangeListIdx++
@@ -377,6 +317,7 @@ func readArgs() {
 	flag.IntVar(&cols, "cols", 100, "number of columns for the game of life")
 	flag.IntVar(&cellWidthPixels, "cellWidthPixels", 10, "the height of a cell in pixels")
 	flag.IntVar(&cellHeightPixels, "cellHeightPixels", 10, "the width of a cell in pixels")
+	flag.IntVar(&aliveRate, "aliveRate", 3, "1 / aliveRate is the chance a cell is alive at start")
 	flag.DurationVar(&tickRate, "tickRate", 100*time.Millisecond, "amount of time to take between ticks")
 
 	flag.Parse()
