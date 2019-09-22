@@ -93,17 +93,28 @@ func run() {
 
 	ticker := time.Tick(tickRate)
 
-	for range ticker {
-		if window.Closed() {
-			break
+	draw(window)
+
+	window.Update()
+
+	for !window.Closed() {
+		select {
+		case <-ticker:
+			doTurn2()
+
+			draw(window)
+
+		default:
+			if window.JustPressed(pixelgl.KeySpace) || window.Pressed(pixelgl.KeySpace) {
+				seedGrid()
+
+				draw(window)
+			}
 		}
 
-		draw(window)
-
 		window.Update()
-
-		doTurn2()
 	}
+
 }
 
 func seedGrid() {
