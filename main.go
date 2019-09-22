@@ -231,6 +231,86 @@ func doTurn() {
 
 			var aliveNeighbors int
 
+			//fmt.Printf("cell (%d, %d)\n", i, j)
+
+			for rowOffset := -1; rowOffset <= 1; rowOffset++ {
+				for colOffset := -1; colOffset <= 1; colOffset++ {
+
+					if rowOffset == 0 && colOffset == 0 {
+						continue
+					}
+
+					neighborRow := i + rowOffset + rows
+
+					if neighborRow >= rows {
+						neighborRow -= rows
+						if neighborRow >= rows {
+							neighborRow -= rows
+						}
+					}
+
+					neighborCol := j + colOffset + cols
+
+					for neighborCol >= cols {
+						neighborCol -= cols
+						for neighborCol >= cols {
+							neighborCol -= cols
+						}
+					}
+
+					//fmt.Printf("neighbor (%d, %d)\n", neighborRow, neighborCol)
+
+					if grid1Rows[neighborRow][neighborCol] {
+						aliveNeighbors++
+					}
+				}
+			}
+
+			grid2Rows[i][j] = aliveNeighbors == 3 || (cell && aliveNeighbors == 2)
+
+			if grid2Rows[i][j] != cell {
+				changeList = append(changeList, vec2{x: i, y: j})
+			}
+		}
+	}
+
+	fmt.Printf("changes: %d\n", len(changeList))
+
+	changeLists = append(changeLists, changeList)
+	lastChangeListIdx++
+
+	grid1, grid2 = grid2, grid1
+	grid1Rows, grid2Rows = grid2Rows, grid1Rows
+}
+
+func doTurn2() {
+	defer func(start time.Time) {
+		fmt.Printf("doTurn2 took %s\n", time.Since(start))
+	}(time.Now())
+
+	// try to apply already saved changes to go forward
+	if lastChangeListIdx < len(changeLists)-1 {
+
+		// increment first because we want the changes to get us to the next state
+		// since lastChangeListIdx contains the changes that got us to the current state
+		lastChangeListIdx++
+
+		applyChange(grid1Rows, changeLists[lastChangeListIdx])
+
+		return
+	}
+
+	changeList := make([]vec2, 0, 512)
+
+	// keep a running track of alive neighbors as we slide the window
+	//var aliveNeighbors int
+
+	for i, row := range grid1Rows {
+
+		for j, cell := range row {
+
+			var aliveNeighbors int
+
 			for rowOffset := -1; rowOffset <= 1; rowOffset++ {
 				for colOffset := -1; colOffset <= 1; colOffset++ {
 
