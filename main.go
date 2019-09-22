@@ -2,6 +2,7 @@ package main
 
 import (
 	"flag"
+	"fmt"
 	"image/color"
 	"log"
 	"math/rand"
@@ -38,17 +39,22 @@ var (
 	stridePixels int
 
 	tickRate time.Duration
+
+	paused bool
+
+	// changeLists[i] contains the cell positions that changed state in moving from step i -> i + 1
+	changeLists       [][]vec2
+	lastChangeListIdx int
 )
+
+type vec2 struct {
+	x int
+	y int
+}
 
 func run() {
 
-	flag.IntVar(&rows, "rows", 100, "number of rows for the game of life")
-	flag.IntVar(&cols, "cols", 100, "number of columns for the game of life")
-	flag.IntVar(&cellWidthPixels, "cellWidthPixels", 10, "the height of a cell in pixels")
-	flag.IntVar(&cellHeightPixels, "cellHeightPixels", 10, "the width of a cell in pixels")
-	flag.DurationVar(&tickRate, "tickRate", 100*time.Millisecond, "amount of time to take between ticks")
-
-	flag.Parse()
+	readArgs()
 
 	windowWidthPixels = cols * cellWidthPixels
 	windowHeightPixels = rows * cellHeightPixels
@@ -68,6 +74,10 @@ func run() {
 		grid2Rows[i] = grid2[rowStart : rowStart+cols]
 	}
 
+	changeLists = make([][]vec2, 0, 512)
+
+	lastChangeListIdx = -1
+
 	rand.Seed(time.Now().UnixNano())
 
 	seedGrid()
@@ -85,6 +95,7 @@ func run() {
 			},
 		},
 		VSync: true,
+		// Resizable: true,
 	})
 
 	if err != nil {
@@ -97,20 +108,40 @@ func run() {
 
 	window.Update()
 
+	var lastPaused time.Time
+	var lastRightPress time.Time
+	var lastLeftPress time.Time
+
 	for !window.Closed() {
+
+		if window.Pressed(pixelgl.KeySpace) && time.Since(lastPaused) >= tickRate {
+			lastPaused = time.Now()
+			paused = !paused
+		}
+
+		if window.Pressed(pixelgl.KeyRight) && paused && time.Since(lastRightPress) >= tickRate {
+			lastRightPress = time.Now()
+
+			doTurn()
+		}
+
+		if window.Pressed(pixelgl.KeyLeft) && paused && time.Since(lastLeftPress) >= tickRate {
+			lastLeftPress = time.Now()
+			reverseChange()
+
+		}
+
 		select {
 		case <-ticker:
-			doTurn()
-
-			draw(window)
+			if !paused {
+				doTurn()
+			}
 
 		default:
-			if window.JustPressed(pixelgl.KeySpace) || window.Pressed(pixelgl.KeySpace) {
-				seedGrid()
 
-				draw(window)
-			}
 		}
+
+		draw(window)
 
 		window.Update()
 	}
@@ -177,6 +208,23 @@ func draw(window *pixelgl.Window) {
 }
 
 func doTurn() {
+	defer func(start time.Time) {
+		fmt.Printf("doTurn took %s\n", time.Since(start))
+	}(time.Now())
+
+	// try to apply already saved changes to go forward
+	if lastChangeListIdx < len(changeLists)-1 {
+
+		// increment first because we want the changes to get us to the next state
+		// since lastChangeListIdx contains the changes that got us to the current state
+		lastChangeListIdx++
+
+		applyChange(grid1Rows, changeLists[lastChangeListIdx])
+
+		return
+	}
+
+	changeList := make([]vec2, 0, 512)
 
 	for i, row := range grid1Rows {
 		for j, cell := range row {
@@ -212,9 +260,44 @@ func doTurn() {
 			}
 
 			grid2Rows[i][j] = aliveNeighbors == 3 || (cell && aliveNeighbors == 2)
+
+			if grid2Rows[i][j] != cell {
+				changeList = append(changeList, vec2{x: i, y: j})
+			}
 		}
 	}
 
+	fmt.Printf("changes: %d\n", len(changeList))
+
+	changeLists = append(changeLists, changeList)
+	lastChangeListIdx++
+
 	grid1, grid2 = grid2, grid1
 	grid1Rows, grid2Rows = grid2Rows, grid1Rows
+}
+
+func reverseChange() {
+	if lastChangeListIdx == -1 {
+		return
+	}
+
+	applyChange(grid1Rows, changeLists[lastChangeListIdx])
+
+	lastChangeListIdx--
+}
+
+func applyChange(gridRows [][]bool, changeList []vec2) {
+	for _, change := range changeList {
+		gridRows[change.x][change.y] = !gridRows[change.x][change.y]
+	}
+}
+
+func readArgs() {
+	flag.IntVar(&rows, "rows", 100, "number of rows for the game of life")
+	flag.IntVar(&cols, "cols", 100, "number of columns for the game of life")
+	flag.IntVar(&cellWidthPixels, "cellWidthPixels", 10, "the height of a cell in pixels")
+	flag.IntVar(&cellHeightPixels, "cellHeightPixels", 10, "the width of a cell in pixels")
+	flag.DurationVar(&tickRate, "tickRate", 100*time.Millisecond, "amount of time to take between ticks")
+
+	flag.Parse()
 }
