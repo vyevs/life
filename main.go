@@ -97,7 +97,7 @@ func run() {
 				Y: float64(cols * cellHeightPixels),
 			},
 		},
-		VSync: true,
+		//VSync: true,
 		// Resizable: true,
 	})
 
@@ -106,6 +106,9 @@ func run() {
 	}
 
 	ticker := time.Tick(tickRate)
+
+	fpsTicker := time.Tick(1 * time.Second)
+	var frames int
 
 	draw(window)
 
@@ -117,6 +120,8 @@ func run() {
 	var lastShiftPress time.Time
 
 	for !window.Closed() {
+
+		frames++
 
 		if window.Pressed(pixelgl.KeySpace) && time.Since(lastPaused) >= tickRate {
 			lastPaused = time.Now()
@@ -154,13 +159,20 @@ func run() {
 
 		}
 
+		select {
+		case <-fpsTicker:
+			window.SetTitle(fmt.Sprintf("FPS: %d", frames))
+			frames = 0
+		default:
+		}
+
 		draw(window)
 
 		window.Update()
 	}
 
-	fmt.Printf("average do turn time: %s\n", totalDoTurnTime/time.Duration(calls))
-
+	fmt.Printf("average do turn time: %s\n", totalDoTurnTime/time.Duration(doTurnCalls))
+	fmt.Printf("average draw time: %s\n", totalDrawTime/time.Duration(drawCalls))
 }
 
 func seedGrid() {
@@ -173,7 +185,15 @@ func seedGrid() {
 var picDataInit bool
 var picData pixel.PictureData
 
+var totalDrawTime time.Duration
+var drawCalls int
+
 func draw(window *pixelgl.Window) {
+	drawCalls++
+	defer func(start time.Time) {
+		totalDrawTime += time.Since(start)
+	}(time.Now())
+
 	if !picDataInit {
 		picData = pixel.PictureData{
 			Pix:    make([]color.RGBA, rows*cellWidthPixels*cols*cellHeightPixels),
@@ -223,10 +243,10 @@ func draw(window *pixelgl.Window) {
 }
 
 var totalDoTurnTime time.Duration
-var calls int
+var doTurnCalls int
 
 func doTurn() {
-	calls++
+	doTurnCalls++
 	defer func(start time.Time) {
 		totalDoTurnTime += time.Since(start)
 	}(time.Now())

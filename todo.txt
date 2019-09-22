@@ -1,0 +1,7 @@
+render in batches, do not go pixel by pixel - each cell should be either its own sprite or picturedata
+
+implement window resizing
+
+
+long term: config menu
+
