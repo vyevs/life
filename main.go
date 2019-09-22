@@ -100,7 +100,7 @@ func run() {
 	for !window.Closed() {
 		select {
 		case <-ticker:
-			doTurn2()
+			doTurn()
 
 			draw(window)
 
@@ -176,7 +176,7 @@ func draw(window *pixelgl.Window) {
 	sprite.Draw(window, pixel.IM.Moved(window.Bounds().Center()))
 }
 
-func doTurn2() {
+func doTurn() {
 
 	for i, row := range grid1Rows {
 		for j, cell := range row {
