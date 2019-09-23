@@ -79,8 +79,6 @@ func run() {
 
 	changeLists = make([][]vec2, 0, 512)
 
-	lastChangeListIdx = -1
-
 	rand.Seed(time.Now().UnixNano())
 
 	seedGrid()
@@ -176,9 +174,21 @@ func run() {
 }
 
 func seedGrid() {
-	for i := range grid1 {
-		grid1[i] = rand.Intn(aliveRate) == 1
+	changeList := make([]vec2, 0, 512)
+
+	for i, row := range grid1Rows {
+		for j := range row {
+			alive := rand.Intn(aliveRate) == 0
+
+			if alive {
+				grid1Rows[i][j] = alive
+
+				changeList = append(changeList, vec2{x: j, y: i})
+			}
+		}
 	}
+
+	changeLists = append(changeLists, changeList)
 }
 
 // don't make a new pixel.PictureData every draw
@@ -317,7 +327,7 @@ func doTurn() {
 }
 
 func reverseChange() {
-	if lastChangeListIdx == -1 {
+	if lastChangeListIdx == 0 {
 		return
 	}
 
