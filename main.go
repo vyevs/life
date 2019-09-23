@@ -288,32 +288,147 @@ func doTurn() {
 
 			var aliveNeighbors int
 
-			for rowOffset := -1; rowOffset <= 1; rowOffset++ {
-				for colOffset := -1; colOffset <= 1; colOffset++ {
+			if i == 0 {
+				wrappedRow := rows - 1
 
-					if rowOffset == 0 && colOffset == 0 {
-						continue
-					}
+				// up & left
+				if j == 0 {
+					wrappedCol := cols - 1
 
-					neighborRow := i + rowOffset
-					neighborCol := j + colOffset
-
-					if neighborRow < 0 {
-						neighborRow = rows - 1
-					} else if neighborRow >= rows {
-						neighborRow = 0
-					}
-
-					if neighborCol < 0 {
-						neighborCol = cols - 1
-					} else if neighborCol >= cols {
-						neighborCol = 0
-					}
-
-					if grid1Rows[neighborRow][neighborCol] {
+					if grid1[wrappedRow*cols+wrappedCol] {
 						aliveNeighbors++
 					}
+				} else if grid1[wrappedRow*cols+j-1] {
+					aliveNeighbors++
 				}
+
+				// up
+				if grid1[wrappedRow*cols+j] {
+					aliveNeighbors++
+				}
+
+				// up & right
+				if j == cols-1 {
+					wrappedCol := 0
+
+					if grid1[wrappedRow*cols+wrappedCol] {
+						aliveNeighbors++
+					}
+				} else if grid1[wrappedRow*cols+j+1] {
+					aliveNeighbors++
+				}
+
+			} else {
+
+				// up & left
+				if j == 0 {
+					wrappedJ := cols - 1
+
+					if grid1[(i-1)*cols+wrappedJ] {
+						aliveNeighbors++
+					}
+				} else if grid1[(i-1)*cols+j-1] {
+					aliveNeighbors++
+				}
+
+				// up
+				if grid1[(i-1)*cols+j] {
+					aliveNeighbors++
+				}
+
+				// up & right
+				if j == cols-1 {
+					wrappedJ := 0
+
+					if grid1[(i-1)*cols+wrappedJ] {
+						aliveNeighbors++
+					}
+				} else if grid1[(i-1)*cols+j+1] {
+					aliveNeighbors++
+				}
+			}
+
+			if i == rows-1 {
+				wrappedRow := 0
+
+				// down & left
+				if j == 0 {
+					wrappedCol := cols - 1
+
+					if grid1[wrappedRow*cols+wrappedCol] {
+						aliveNeighbors++
+					}
+				} else if grid1[wrappedRow*cols+j-1] {
+					aliveNeighbors++
+				}
+
+				// down
+				if grid1[wrappedRow*cols+j] {
+					aliveNeighbors++
+				}
+
+				// down & right
+				if j == cols-1 {
+					wrappedCol := 0
+
+					if grid1[wrappedRow*cols+wrappedCol] {
+						aliveNeighbors++
+					}
+				} else if grid1[wrappedRow*cols+j+1] {
+					aliveNeighbors++
+				}
+
+			} else {
+
+				// down & left
+				if j == 0 {
+					wrappedCol := cols - 1
+
+					if grid1[(i+1)*cols+wrappedCol] {
+						aliveNeighbors++
+					}
+				} else if grid1[(i+1)*cols+j-1] {
+					aliveNeighbors++
+				}
+
+				// down
+				if grid1[(i+1)*cols+j] {
+					aliveNeighbors++
+				}
+
+				// down & right
+				if j == cols-1 {
+					wrappedCol := 0
+
+					if grid1[(i+1)*cols+wrappedCol] {
+						aliveNeighbors++
+					}
+				} else if grid1[(i+1)*cols+j+1] {
+					aliveNeighbors++
+				}
+			}
+
+			// left, wrap to last column
+			if j == 0 {
+				wrappedCol := cols - 1
+
+				if grid1[i*cols+wrappedCol] {
+					aliveNeighbors++
+				}
+
+			} else if grid1[i*cols+j-1] { // left, no column wrap
+				aliveNeighbors++
+			}
+
+			// right, wrap to 1st column
+			if j == cols-1 {
+				wrappedCol := 0
+
+				if grid1[i*cols+wrappedCol] {
+					aliveNeighbors++
+				}
+			} else if grid1[i*cols+j+1] { // right, no column wrap
+				aliveNeighbors++
 			}
 
 			grid2Rows[i][j] = aliveNeighbors == 3 || (cell && aliveNeighbors == 2)
