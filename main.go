@@ -43,16 +43,18 @@ var (
 	paused bool
 
 	// changeLists[i] contains the cell positions that changed state in moving from step i -> i + 1
-	changeLists       [][]vec2
+	changeLists       [][]cellLoc
 	lastChangeListIdx = -1
 
 	// change of a cell being alive from the start is 1 / aliveRate
 	aliveRate int
+
+	reversed bool
 )
 
-type vec2 struct {
-	x int
-	y int
+type cellLoc struct {
+	row int
+	col int
 }
 
 func run() {
@@ -77,7 +79,7 @@ func run() {
 		grid2Rows[i] = grid2[rowStart : rowStart+cols]
 	}
 
-	changeLists = make([][]vec2, 0, 512)
+	changeLists = make([][]cellLoc, 0, 512)
 
 	rand.Seed(time.Now().UnixNano())
 
@@ -91,8 +93,8 @@ func run() {
 				Y: 0,
 			},
 			Max: pixel.Vec{
-				X: float64(rows * cellWidthPixels),
-				Y: float64(cols * cellHeightPixels),
+				X: float64(cols * cellWidthPixels),
+				Y: float64(rows * cellHeightPixels),
 			},
 		},
 		//VSync: true,
@@ -110,8 +112,6 @@ func run() {
 
 	window.Clear(colornames.White)
 
-	draw(window)
-
 	window.Update()
 
 	var lastPaused time.Time
@@ -120,6 +120,8 @@ func run() {
 	var lastShiftPress time.Time
 
 	for !window.Closed() {
+
+		reversed = false
 
 		frames++
 
@@ -138,6 +140,8 @@ func run() {
 			lastLeftPress = time.Now()
 
 			reverseChange()
+
+			reversed = true
 		}
 
 		if window.Pressed(pixelgl.KeyLeftShift) && time.Since(lastShiftPress) >= tickRate {
@@ -175,7 +179,7 @@ func run() {
 }
 
 func seedGrid() {
-	changeList := make([]vec2, 0, 512)
+	changeList := make([]cellLoc, 0, 512)
 
 	for i, row := range grid1Rows {
 		for j := range row {
@@ -184,7 +188,7 @@ func seedGrid() {
 			if alive {
 				grid1Rows[i][j] = alive
 
-				changeList = append(changeList, vec2{x: j, y: i})
+				changeList = append(changeList, cellLoc{row: i, col: j})
 			}
 		}
 	}
@@ -217,21 +221,26 @@ func draw(window *pixelgl.Window) {
 					Y: 0,
 				},
 				Max: pixel.Vec{
-					X: float64(rows * cellWidthPixels),
-					Y: float64(cols * cellHeightPixels),
+					X: float64(cols * cellWidthPixels),
+					Y: float64(rows * cellHeightPixels),
 				},
 			},
 		}
 		picDataInit = true
 	}
 
-	changeList := changeLists[lastChangeListIdx]
+	var changeList []cellLoc
+	if reversed {
+		changeList = changeLists[lastChangeListIdx+1]
+	} else {
+		changeList = changeLists[lastChangeListIdx]
+	}
 
 	for _, change := range changeList {
-		cellUpperLeftPixel := change.y*stridePixels + change.x*cellWidthPixels
+		cellUpperLeftPixel := change.row*stridePixels + change.col*cellWidthPixels
 
 		var cellColor color.RGBA
-		if grid1Rows[change.y][change.x] {
+		if grid1Rows[change.row][change.col] {
 			cellColor = colornames.Black
 		} else {
 			cellColor = colornames.White
@@ -264,8 +273,6 @@ func doTurn() {
 
 	// try to apply already saved changes to go forward
 	if lastChangeListIdx < len(changeLists)-1 {
-		fmt.Println("moving forward through diff")
-
 		lastChangeListIdx++
 
 		applyChange(grid1Rows, changeLists[lastChangeListIdx])
@@ -273,7 +280,7 @@ func doTurn() {
 		return
 	}
 
-	changeList := make([]vec2, 0, 512)
+	changeList := make([]cellLoc, 0, 512)
 
 	for i, row := range grid1Rows {
 
@@ -312,12 +319,10 @@ func doTurn() {
 			grid2Rows[i][j] = aliveNeighbors == 3 || (cell && aliveNeighbors == 2)
 
 			if grid2Rows[i][j] != cell {
-				changeList = append(changeList, vec2{x: j, y: i})
+				changeList = append(changeList, cellLoc{row: i, col: j})
 			}
 		}
 	}
-
-	//fmt.Printf("changes: %d\n", len(changeList))
 
 	changeLists = append(changeLists, changeList)
 
@@ -327,21 +332,21 @@ func doTurn() {
 	grid1Rows, grid2Rows = grid2Rows, grid1Rows
 }
 
+// moves the grid1 state into the state prior to the current grid1 state
+// only goes as far as the initial seed state, not to empty grid
 func reverseChange() {
 	if lastChangeListIdx == 0 {
 		return
 	}
-
-	fmt.Println("moving backwards through diff")
 
 	applyChange(grid1Rows, changeLists[lastChangeListIdx])
 
 	lastChangeListIdx--
 }
 
-func applyChange(gridRows [][]bool, changeList []vec2) {
+func applyChange(gridRows [][]bool, changeList []cellLoc) {
 	for _, change := range changeList {
-		gridRows[change.x][change.y] = !gridRows[change.x][change.y]
+		gridRows[change.row][change.col] = !gridRows[change.row][change.col]
 	}
 }
 
