@@ -44,7 +44,7 @@ var (
 
 	// changeLists[i] contains the cell positions that changed state in moving from step i -> i + 1
 	changeLists       [][]vec2
-	lastChangeListIdx int
+	lastChangeListIdx = -1
 
 	// change of a cell being alive from the start is 1 / aliveRate
 	aliveRate int
@@ -108,6 +108,8 @@ func run() {
 	fpsTicker := time.Tick(1 * time.Second)
 	var frames int
 
+	window.Clear(colornames.White)
+
 	draw(window)
 
 	window.Update()
@@ -141,10 +143,11 @@ func run() {
 		if window.Pressed(pixelgl.KeyLeftShift) && time.Since(lastShiftPress) >= tickRate {
 			lastShiftPress = time.Now()
 
-			seedGrid()
-
 			lastChangeListIdx = -1
+
 			changeLists = changeLists[:0]
+
+			seedGrid()
 		}
 
 		select {
@@ -152,9 +155,7 @@ func run() {
 			if !paused {
 				doTurn()
 			}
-
 		default:
-
 		}
 
 		select {
@@ -187,6 +188,8 @@ func seedGrid() {
 			}
 		}
 	}
+
+	lastChangeListIdx++
 
 	changeLists = append(changeLists, changeList)
 }
@@ -222,27 +225,25 @@ func draw(window *pixelgl.Window) {
 		picDataInit = true
 	}
 
-	for i, row := range grid1Rows {
-		for j, cell := range row {
+	changeList := changeLists[lastChangeListIdx]
 
-			cellUpperLeftPixel := i*stridePixels + j*cellWidthPixels
+	for _, change := range changeList {
+		cellUpperLeftPixel := change.y*stridePixels + change.x*cellWidthPixels
 
-			// move down and right from the cell's upper left pixel
-			for down := 0; down < cellHeightPixels; down++ {
-				downOffset := down * windowWidthPixels
+		var cellColor color.RGBA
+		if grid1Rows[change.y][change.x] {
+			cellColor = colornames.Black
+		} else {
+			cellColor = colornames.White
+		}
 
-				for right := 0; right < cellWidthPixels; right++ {
+		for down := 0; down < cellHeightPixels; down++ {
+			downOffset := down * windowWidthPixels
 
-					var cellColor color.RGBA
-					if cell {
-						cellColor = colornames.Black
-					} else {
-						cellColor = colornames.White
-					}
+			for right := 0; right < cellWidthPixels; right++ {
 
-					picData.Pix[cellUpperLeftPixel+right+downOffset] = cellColor
+				picData.Pix[cellUpperLeftPixel+right+downOffset] = cellColor
 
-				}
 			}
 		}
 	}
@@ -263,9 +264,8 @@ func doTurn() {
 
 	// try to apply already saved changes to go forward
 	if lastChangeListIdx < len(changeLists)-1 {
+		fmt.Println("moving forward through diff")
 
-		// increment first because we want the changes to get us to the next state
-		// since lastChangeListIdx contains the changes that got us to the current state
 		lastChangeListIdx++
 
 		applyChange(grid1Rows, changeLists[lastChangeListIdx])
@@ -312,7 +312,7 @@ func doTurn() {
 			grid2Rows[i][j] = aliveNeighbors == 3 || (cell && aliveNeighbors == 2)
 
 			if grid2Rows[i][j] != cell {
-				changeList = append(changeList, vec2{x: i, y: j})
+				changeList = append(changeList, vec2{x: j, y: i})
 			}
 		}
 	}
@@ -320,6 +320,7 @@ func doTurn() {
 	//fmt.Printf("changes: %d\n", len(changeList))
 
 	changeLists = append(changeLists, changeList)
+
 	lastChangeListIdx++
 
 	grid1, grid2 = grid2, grid1
@@ -330,6 +331,8 @@ func reverseChange() {
 	if lastChangeListIdx == 0 {
 		return
 	}
+
+	fmt.Println("moving backwards through diff")
 
 	applyChange(grid1Rows, changeLists[lastChangeListIdx])
 
