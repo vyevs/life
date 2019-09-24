@@ -6,6 +6,7 @@ import (
 	"image/color"
 	"log"
 	"math/rand"
+	"sync/atomic"
 	"time"
 
 	"github.com/faiface/pixel"
@@ -97,7 +98,7 @@ func run() {
 				Y: float64(rows * cellHeightPixels),
 			},
 		},
-		//VSync: true,
+		VSync: true,
 		// Resizable: true,
 	})
 
@@ -108,22 +109,30 @@ func run() {
 	ticker := time.Tick(tickRate)
 
 	fpsTicker := time.Tick(1 * time.Second)
-	var frames int
-
-	window.Clear(colornames.White)
-
-	window.Update()
+	var fps uint64
 
 	var lastPaused time.Time
 	var lastRightPress time.Time
 	var lastLeftPress time.Time
 	var lastShiftPress time.Time
 
+	go func() {
+		for {
+			<-fpsTicker
+			window.SetTitle(fmt.Sprintf("FPS: %d", atomic.LoadUint64(&fps)))
+			atomic.StoreUint64(&fps, 0)
+		}
+	}()
+
+	window.Clear(colornames.White)
+
+	window.Update()
+
 	for !window.Closed() {
 
 		reversed = false
 
-		frames++
+		atomic.AddUint64(&fps, 1)
 
 		if window.Pressed(pixelgl.KeySpace) && time.Since(lastPaused) >= tickRate {
 			lastPaused = time.Now()
@@ -159,13 +168,6 @@ func run() {
 			if !paused {
 				doTurn()
 			}
-		default:
-		}
-
-		select {
-		case <-fpsTicker:
-			window.SetTitle(fmt.Sprintf("FPS: %d", frames))
-			frames = 0
 		default:
 		}
 
