@@ -18,73 +18,57 @@ func main() {
 	pixelgl.Run(run)
 }
 
-var (
-	// swap buffers each frame, buf1 is always the one to display
-	grid1 []bool
-	grid2 []bool
-
-	// 2d views of the grids, for simpler manipulation
-	grid1Rows [][]bool
-	grid2Rows [][]bool
-
-	rows int
-	cols int
-
-	cellWidthPixels  int
-	cellHeightPixels int
-
-	windowWidthPixels  int
-	windowHeightPixels int
-
-	// number of pixels in flat pixel view to move right to get to the cell below you
-	stridePixels int
-
-	tickRate time.Duration
-
-	paused bool
-
-	// changeLists[i] contains the cell positions that changed state in moving from step i -> i + 1
-	changeLists       [][]cellLoc
-	lastChangeListIdx = -1
-
-	// change of a cell being alive from the start is 1 / aliveRate
-	aliveRate int
-
-	reversed bool
-)
-
-type cellLoc struct {
+type cellDiff struct {
 	row int
 	col int
 }
 
 func run() {
 
-	readArgs()
+	var rows int
+	var cols int
 
-	windowWidthPixels = cols * cellWidthPixels
-	windowHeightPixels = rows * cellHeightPixels
+	// the dimensions of a logical cell in terms of pixels on the screen
+	var cellWidthPixels int
+	var cellHeightPixels int
 
-	stridePixels = windowWidthPixels * cellHeightPixels
+	// chance of a cell being alive from the start is 1 / aliveRate
+	var aliveRate int
 
-	grid1 = make([]bool, rows*cols)
-	grid2 = make([]bool, rows*cols)
+	// rate at which a new state is calculated in order to be displayed, we don't want to display very rapid state changes
+	var tickRate time.Duration
 
-	grid1Rows = make([][]bool, rows)
-	grid2Rows = make([][]bool, rows)
+	rows, cols, cellWidthPixels, cellHeightPixels, aliveRate, tickRate = initVars()
+
+	fmt.Printf("rows: %d cols: %d cellWidthPixels: %d cellHeightPixels: %d aliveRate: %d tickRate: %s\n", rows, cols, cellWidthPixels, cellHeightPixels, aliveRate, tickRate)
+
+	grid1 := make([][]bool, rows)
+	grid2 := make([][]bool, rows)
 
 	for i := 0; i < rows; i++ {
-		rowStart := i * cols
-
-		grid1Rows[i] = grid1[rowStart : rowStart+cols]
-		grid2Rows[i] = grid2[rowStart : rowStart+cols]
+		grid1[i] = make([]bool, cols)
+		grid2[i] = make([]bool, cols)
 	}
 
-	changeLists = make([][]cellLoc, 0, 512)
+	gridDrawer := gridDrawer{
+		rows:             rows,
+		cols:             cols,
+		cellWidthPixels:  cellWidthPixels,
+		cellHeightPixels: cellHeightPixels,
+	}
+	gridDrawer.init()
+
+	// changeLists[i] is the changes that were applied to state i-1 to get to state i
+	// i.e.: changeLists[0] is the seed changes that were applied to an completely dead grid
+	changeLists := make([][]cellDiff, 0, 512)
 
 	rand.Seed(time.Now().UnixNano())
 
-	seedGrid()
+	initialChanges := seedGrid(grid1, aliveRate)
+
+	lastChangesIdx := -1
+
+	var paused bool
 
 	window, err := pixelgl.NewWindow(pixelgl.WindowConfig{
 		Title: "Life",
@@ -98,8 +82,7 @@ func run() {
 				Y: float64(rows * cellHeightPixels),
 			},
 		},
-		VSync: true,
-		// Resizable: true,
+		//VSync: true,
 	})
 
 	if err != nil {
@@ -111,11 +94,7 @@ func run() {
 	fpsTicker := time.Tick(1 * time.Second)
 	var fps uint64
 
-	var lastPaused time.Time
-	var lastRightPress time.Time
-	var lastLeftPress time.Time
-	var lastShiftPress time.Time
-
+	// do FPS drawing to title bar in a separate go routine, this routine sleeps 99% of the time
 	go func() {
 		for {
 			<-fpsTicker
@@ -126,140 +105,194 @@ func run() {
 
 	window.Clear(colornames.White)
 
+	gridDrawer.draw(grid1, initialChanges, window)
+
 	window.Update()
 
 	for !window.Closed() {
 
-		reversed = false
-
 		atomic.AddUint64(&fps, 1)
 
-		if window.Pressed(pixelgl.KeySpace) && time.Since(lastPaused) >= tickRate {
-			lastPaused = time.Now()
+		if window.JustPressed(pixelgl.KeySpace) {
 			paused = !paused
-		}
 
-		if window.Pressed(pixelgl.KeyRight) && paused && time.Since(lastRightPress) >= tickRate {
-			lastRightPress = time.Now()
+		} else if window.JustPressed(pixelgl.KeyRight) && paused {
+			// can't reuse a saved diff, make a move and then use those changes
+			if lastChangesIdx == len(changeLists)-1 {
+				fmt.Println("not reusing diff")
+				changeList := doTurn(grid1, grid2)
 
-			doTurn()
-		}
+				grid1, grid2 = grid2, grid1
 
-		if window.Pressed(pixelgl.KeyLeft) && paused && time.Since(lastLeftPress) >= tickRate {
-			lastLeftPress = time.Now()
+				changeLists = append(changeLists, changeList)
+				lastChangesIdx++
 
-			reverseChange()
+				gridDrawer.draw(grid1, changeList, window)
 
-			reversed = true
-		}
+			} else { // can reuse a saved diff here
 
-		if window.Pressed(pixelgl.KeyLeftShift) && time.Since(lastShiftPress) >= tickRate {
-			lastShiftPress = time.Now()
+				lastChangesIdx++
 
-			lastChangeListIdx = -1
+				fmt.Printf("reusing diff %d\n", lastChangesIdx)
+
+				changeList := changeLists[lastChangesIdx]
+
+				applyChanges(grid1, changeList)
+
+				gridDrawer.draw(grid1, changeList, window)
+			}
+
+		} else if window.JustPressed(pixelgl.KeyLeft) && paused {
+
+			// apply the diffs at lastChangeIdx to the grid & then draw using that grid & diffs
+			if lastChangesIdx >= 0 {
+				fmt.Printf("applying change idx %d to go back\n", lastChangesIdx)
+				changeList := changeLists[lastChangesIdx]
+
+				applyChanges(grid1, changeList)
+				gridDrawer.draw(grid1, changeList, window)
+				lastChangesIdx--
+			}
+
+		} else if window.JustPressed(pixelgl.KeyLeftShift) {
 
 			changeLists = changeLists[:0]
 
-			seedGrid()
+			newInitialChanges := seedGrid(grid1, aliveRate)
+
+			changeLists = append(changeLists, newInitialChanges)
+
+			window.Clear(colornames.White)
+
+			gridDrawer.draw(grid1, newInitialChanges, window)
 		}
 
 		select {
 		case <-ticker:
 			if !paused {
-				doTurn()
+				changeList := doTurn(grid1, grid2)
+
+				changeLists = append(changeLists, changeList)
+				lastChangesIdx++
+
+				fmt.Printf("new last diff: %d\n", lastChangesIdx)
+
+				// swap the buffers so that grid1 has the new state
+				grid1, grid2 = grid2, grid1
+
+				gridDrawer.draw(grid1, changeList, window)
 			}
 		default:
 		}
 
-		draw(window)
-
 		window.Update()
 	}
 
-	fmt.Printf("average do turn time: %s\n", totalDoTurnTime/time.Duration(doTurnCalls))
-	fmt.Printf("average draw time: %s\n", totalDrawTime/time.Duration(drawCalls))
+	if doTurnCalls == 0 {
+		fmt.Println("no doTurn calls were made")
+	} else {
+		fmt.Printf("average do turn time: %s\n", totalDoTurnTime/time.Duration(doTurnCalls))
+	}
+
+	if drawCalls == 0 {
+		fmt.Println("no draw calls were made")
+	} else {
+		fmt.Printf("average draw time: %s\n", totalDrawTime/time.Duration(drawCalls))
+	}
 }
 
-func seedGrid() {
-	changeList := make([]cellLoc, 0, 512)
+// seedGrid seeds grid with alive cells that are a live at a rate of 1 / aliveRate
+// it returns a changeList of all the cells that changed
+func seedGrid(grid [][]bool, aliveRate int) []cellDiff {
+	changeList := make([]cellDiff, 0, 512)
 
-	for i, row := range grid1Rows {
-		for j := range row {
-			alive := rand.Intn(aliveRate) == 0
+	for rowNum, row := range grid {
+		for colNum := range row {
+			if rand.Intn(aliveRate) == 0 {
+				grid[rowNum][colNum] = true
 
-			if alive {
-				grid1Rows[i][j] = alive
-
-				changeList = append(changeList, cellLoc{row: i, col: j})
+				changeList = append(changeList, cellDiff{row: rowNum, col: colNum})
 			}
 		}
 	}
 
-	lastChangeListIdx++
-
-	changeLists = append(changeLists, changeList)
+	return changeList
 }
 
-// don't make a new pixel.PictureData every draw
-var picDataInit bool
-var picData pixel.PictureData
+type gridDrawer struct {
+	// this picData is reused between draw calls
+	picData pixel.PictureData
+
+	// cells in the grid that we are drawing
+	rows int
+	cols int
+
+	cellWidthPixels  int
+	cellHeightPixels int
+
+	windowStride int
+
+	pixelsToNextRow int
+}
+
+// initializes the pixData of the drawer, the dimension fields must have been set at this point
+func (gd *gridDrawer) init() {
+	gd.picData.Pix = make([]color.RGBA, gd.rows*gd.cellHeightPixels*gd.cellWidthPixels*gd.cols)
+
+	fmt.Printf("total pixels: %d\n", len(gd.picData.Pix))
+
+	gd.windowStride = gd.cols * gd.cellWidthPixels
+
+	fmt.Printf("window stride: %d\n", gd.windowStride)
+
+	gd.picData.Stride = gd.windowStride
+
+	gd.pixelsToNextRow = gd.windowStride * gd.cellHeightPixels
+
+	fmt.Printf("pixels to next row: %d\n", gd.pixelsToNextRow)
+
+	gd.picData.Rect = pixel.Rect{
+		Max: pixel.Vec{
+			X: float64(gd.windowStride),
+			Y: float64(gd.rows * gd.cellHeightPixels),
+		},
+	}
+}
 
 var totalDrawTime time.Duration
 var drawCalls int
 
-func draw(window *pixelgl.Window) {
+// draws all the changes in changeList to window
+// drawing is done based on diffs because it saves a lot of iterations and the previous state stays drawn to the screen
+// so only cells that changed need to have their color changed
+func (gd *gridDrawer) draw(gridRows [][]bool, changeList []cellDiff, window *pixelgl.Window) {
 	drawCalls++
 	defer func(start time.Time) {
 		totalDrawTime += time.Since(start)
 	}(time.Now())
 
-	if !picDataInit {
-		picData = pixel.PictureData{
-			Pix:    make([]color.RGBA, rows*cellWidthPixels*cols*cellHeightPixels),
-			Stride: cols * cellWidthPixels,
-			Rect: pixel.Rect{
-				Min: pixel.Vec{
-					X: 0,
-					Y: 0,
-				},
-				Max: pixel.Vec{
-					X: float64(cols * cellWidthPixels),
-					Y: float64(rows * cellHeightPixels),
-				},
-			},
-		}
-		picDataInit = true
-	}
-
-	var changeList []cellLoc
-	if reversed {
-		changeList = changeLists[lastChangeListIdx+1]
-	} else {
-		changeList = changeLists[lastChangeListIdx]
-	}
-
 	for _, change := range changeList {
-		cellUpperLeftPixel := change.row*stridePixels + change.col*cellWidthPixels
+		cellUpperLeftPixel := change.row*gd.pixelsToNextRow + change.col*gd.cellWidthPixels
 
 		var cellColor color.RGBA
-		if grid1Rows[change.row][change.col] {
+		if gridRows[change.row][change.col] {
 			cellColor = colornames.Black
 		} else {
 			cellColor = colornames.White
 		}
 
-		for down := 0; down < cellHeightPixels; down++ {
-			downOffset := down * windowWidthPixels
+		for down := 0; down < gd.cellHeightPixels; down++ {
+			downOffset := down * gd.windowStride
 
-			for right := 0; right < cellWidthPixels; right++ {
+			for right := 0; right < gd.cellWidthPixels; right++ {
 
-				picData.Pix[cellUpperLeftPixel+right+downOffset] = cellColor
+				gd.picData.Pix[cellUpperLeftPixel+right+downOffset] = cellColor
 
 			}
 		}
 	}
 
-	sprite := pixel.NewSprite(&picData, picData.Bounds())
+	sprite := pixel.NewSprite(&gd.picData, gd.picData.Bounds())
 
 	sprite.Draw(window, pixel.IM.Moved(window.Bounds().Center()))
 }
@@ -267,207 +300,97 @@ func draw(window *pixelgl.Window) {
 var totalDoTurnTime time.Duration
 var doTurnCalls int
 
-func doTurn() {
+// doTurn does a game of life tick based on state from and places the result into to
+// returns the change list of cells that changed
+func doTurn(from, to [][]bool) []cellDiff {
 	doTurnCalls++
 	defer func(start time.Time) {
 		totalDoTurnTime += time.Since(start)
 	}(time.Now())
 
-	// try to apply already saved changes to go forward
-	if lastChangeListIdx < len(changeLists)-1 {
-		lastChangeListIdx++
+	changeList := make([]cellDiff, 0, 512)
 
-		applyChange(grid1Rows, changeLists[lastChangeListIdx])
+	lastRow := len(from) - 1
+	lastCol := len(from[0]) - 1
 
-		return
-	}
-
-	changeList := make([]cellLoc, 0, 512)
-
-	for i, row := range grid1Rows {
-
-		for j, cell := range row {
+	for rowNum, row := range from {
+		for colNum, cell := range row {
 
 			var aliveNeighbors int
 
-			if i == 0 {
-				wrappedRow := rows - 1
-
-				// up & left
-				if j == 0 {
-					wrappedCol := cols - 1
-
-					if grid1[wrappedRow*cols+wrappedCol] {
-						aliveNeighbors++
-					}
-				} else if grid1[wrappedRow*cols+j-1] {
-					aliveNeighbors++
-				}
-
-				// up
-				if grid1[wrappedRow*cols+j] {
-					aliveNeighbors++
-				}
-
-				// up & right
-				if j == cols-1 {
-					wrappedCol := 0
-
-					if grid1[wrappedRow*cols+wrappedCol] {
-						aliveNeighbors++
-					}
-				} else if grid1[wrappedRow*cols+j+1] {
-					aliveNeighbors++
-				}
-
-			} else {
-
-				// up & left
-				if j == 0 {
-					wrappedJ := cols - 1
-
-					if grid1[(i-1)*cols+wrappedJ] {
-						aliveNeighbors++
-					}
-				} else if grid1[(i-1)*cols+j-1] {
-					aliveNeighbors++
-				}
-
-				// up
-				if grid1[(i-1)*cols+j] {
-					aliveNeighbors++
-				}
-
-				// up & right
-				if j == cols-1 {
-					wrappedJ := 0
-
-					if grid1[(i-1)*cols+wrappedJ] {
-						aliveNeighbors++
-					}
-				} else if grid1[(i-1)*cols+j+1] {
-					aliveNeighbors++
-				}
+			upRow := rowNum - 1
+			if rowNum == 0 {
+				upRow = lastRow
 			}
 
-			if i == rows-1 {
-				wrappedRow := 0
-
-				// down & left
-				if j == 0 {
-					wrappedCol := cols - 1
-
-					if grid1[wrappedRow*cols+wrappedCol] {
-						aliveNeighbors++
-					}
-				} else if grid1[wrappedRow*cols+j-1] {
-					aliveNeighbors++
-				}
-
-				// down
-				if grid1[wrappedRow*cols+j] {
-					aliveNeighbors++
-				}
-
-				// down & right
-				if j == cols-1 {
-					wrappedCol := 0
-
-					if grid1[wrappedRow*cols+wrappedCol] {
-						aliveNeighbors++
-					}
-				} else if grid1[wrappedRow*cols+j+1] {
-					aliveNeighbors++
-				}
-
-			} else {
-
-				// down & left
-				if j == 0 {
-					wrappedCol := cols - 1
-
-					if grid1[(i+1)*cols+wrappedCol] {
-						aliveNeighbors++
-					}
-				} else if grid1[(i+1)*cols+j-1] {
-					aliveNeighbors++
-				}
-
-				// down
-				if grid1[(i+1)*cols+j] {
-					aliveNeighbors++
-				}
-
-				// down & right
-				if j == cols-1 {
-					wrappedCol := 0
-
-					if grid1[(i+1)*cols+wrappedCol] {
-						aliveNeighbors++
-					}
-				} else if grid1[(i+1)*cols+j+1] {
-					aliveNeighbors++
-				}
+			leftCol := colNum - 1
+			if colNum == 0 {
+				leftCol = lastCol
 			}
 
-			// left, wrap to last column
-			if j == 0 {
-				wrappedCol := cols - 1
+			downRow := rowNum + 1
+			if rowNum == lastRow {
+				downRow = 0
+			}
 
-				if grid1[i*cols+wrappedCol] {
-					aliveNeighbors++
-				}
+			rightCol := colNum + 1
+			if colNum == lastCol {
+				rightCol = 0
+			}
 
-			} else if grid1[i*cols+j-1] { // left, no column wrap
+			// up left
+			if from[upRow][leftCol] {
+				aliveNeighbors++
+			}
+			// up
+			if from[upRow][colNum] {
+				aliveNeighbors++
+			}
+			// up right
+			if from[upRow][rightCol] {
+				aliveNeighbors++
+			}
+			// left
+			if from[rowNum][leftCol] {
+				aliveNeighbors++
+			}
+			// right
+			if from[rowNum][rightCol] {
+				aliveNeighbors++
+			}
+			// down left
+			if from[downRow][leftCol] {
+				aliveNeighbors++
+			}
+			// down
+			if from[downRow][colNum] {
+				aliveNeighbors++
+			}
+			// down right
+			if from[downRow][rightCol] {
 				aliveNeighbors++
 			}
 
-			// right, wrap to 1st column
-			if j == cols-1 {
-				wrappedCol := 0
+			alive := aliveNeighbors == 3 || (cell && aliveNeighbors == 2)
 
-				if grid1[i*cols+wrappedCol] {
-					aliveNeighbors++
-				}
-			} else if grid1[i*cols+j+1] { // right, no column wrap
-				aliveNeighbors++
-			}
+			to[rowNum][colNum] = alive
 
-			grid2Rows[i][j] = aliveNeighbors == 3 || (cell && aliveNeighbors == 2)
-
-			if grid2Rows[i][j] != cell {
-				changeList = append(changeList, cellLoc{row: i, col: j})
+			if alive != cell {
+				changeList = append(changeList, cellDiff{row: rowNum, col: colNum})
 			}
 		}
 	}
 
-	changeLists = append(changeLists, changeList)
-
-	lastChangeListIdx++
-
-	grid1, grid2 = grid2, grid1
-	grid1Rows, grid2Rows = grid2Rows, grid1Rows
+	return changeList
 }
 
-// moves the grid1 state into the state prior to the current grid1 state
-// only goes as far as the initial seed state, not to empty grid
-func reverseChange() {
-	if lastChangeListIdx == 0 {
-		return
-	}
-
-	applyChange(grid1Rows, changeLists[lastChangeListIdx])
-
-	lastChangeListIdx--
-}
-
-func applyChange(gridRows [][]bool, changeList []cellLoc) {
+func applyChanges(grid [][]bool, changeList []cellDiff) {
 	for _, change := range changeList {
-		gridRows[change.row][change.col] = !gridRows[change.row][change.col]
+		grid[change.row][change.col] = !grid[change.row][change.col]
 	}
 }
 
-func readArgs() {
+func initVars() (rows, cols, cellWidthPixels, cellHeightPixels, aliveRate int, tickRate time.Duration) {
 	flag.IntVar(&rows, "rows", 100, "number of rows for the game of life")
 	flag.IntVar(&cols, "cols", 100, "number of columns for the game of life")
 	flag.IntVar(&cellWidthPixels, "cellWidthPixels", 10, "the height of a cell in pixels")
@@ -476,4 +399,6 @@ func readArgs() {
 	flag.DurationVar(&tickRate, "tickRate", 100*time.Millisecond, "amount of time to take between ticks")
 
 	flag.Parse()
+
+	return rows, cols, cellWidthPixels, cellHeightPixels, aliveRate, tickRate
 }
