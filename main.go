@@ -89,7 +89,7 @@ func run() {
 		log.Fatal(err)
 	}
 
-	ticker := time.Tick(tickRate)
+	ticker := time.NewTicker(tickRate)
 
 	fpsTicker := time.Tick(1 * time.Second)
 	var fps uint64
@@ -165,10 +165,27 @@ func run() {
 			window.Clear(colornames.White)
 
 			gridDrawer.draw(grid1, newInitialChanges, window)
+
+		} else if window.JustPressed(pixelgl.KeyComma) {
+
+			if tickRate > 50*time.Millisecond {
+				ticker.Stop()
+				if tickRate/2 < 50*time.Millisecond {
+					tickRate = 50 * time.Millisecond
+				} else {
+					tickRate /= 2
+				}
+				ticker = time.NewTicker(tickRate)
+			}
+
+		} else if window.JustPressed(pixelgl.KeyPeriod) {
+			ticker.Stop()
+			tickRate *= 2
+			ticker = time.NewTicker(tickRate)
 		}
 
 		select {
-		case <-ticker:
+		case <-ticker.C:
 			if !paused {
 				changeList := doTurn(grid1, grid2)
 
