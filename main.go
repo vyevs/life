@@ -83,6 +83,7 @@ func run() {
 			},
 		},
 		//VSync: true,
+		Resizable: true,
 	})
 
 	if err != nil {
@@ -105,13 +106,17 @@ func run() {
 
 	window.Clear(colornames.White)
 
-	gridDrawer.draw(grid1, initialChanges, window)
+	gridDrawer.drawDiff(grid1, initialChanges, window)
 
 	window.Update()
 
 	for !window.Closed() {
 
-		atomic.AddUint64(&fps, 1)
+		// handle possible resizing of window
+		changed := gridDrawer.maybeReconfigure(window)
+		if changed {
+			gridDrawer.drawGrid(grid1, window)
+		}
 
 		if window.JustPressed(pixelgl.KeySpace) {
 			paused = !paused
@@ -119,7 +124,6 @@ func run() {
 		} else if window.JustPressed(pixelgl.KeyRight) && paused {
 			// can't reuse a saved diff, make a move and then use those changes
 			if lastChangesIdx == len(changeLists)-1 {
-				fmt.Println("not reusing diff")
 				changeList := doTurn(grid1, grid2)
 
 				grid1, grid2 = grid2, grid1
@@ -127,30 +131,27 @@ func run() {
 				changeLists = append(changeLists, changeList)
 				lastChangesIdx++
 
-				gridDrawer.draw(grid1, changeList, window)
+				gridDrawer.drawDiff(grid1, changeList, window)
 
 			} else { // can reuse a saved diff here
 
 				lastChangesIdx++
 
-				fmt.Printf("reusing diff %d\n", lastChangesIdx)
-
 				changeList := changeLists[lastChangesIdx]
 
 				applyChanges(grid1, changeList)
 
-				gridDrawer.draw(grid1, changeList, window)
+				gridDrawer.drawDiff(grid1, changeList, window)
 			}
 
 		} else if window.JustPressed(pixelgl.KeyLeft) && paused {
 
 			// apply the diffs at lastChangeIdx to the grid & then draw using that grid & diffs
 			if lastChangesIdx >= 0 {
-				fmt.Printf("applying change idx %d to go back\n", lastChangesIdx)
 				changeList := changeLists[lastChangesIdx]
 
 				applyChanges(grid1, changeList)
-				gridDrawer.draw(grid1, changeList, window)
+				gridDrawer.drawDiff(grid1, changeList, window)
 				lastChangesIdx--
 			}
 
@@ -164,19 +165,12 @@ func run() {
 
 			window.Clear(colornames.White)
 
-			gridDrawer.draw(grid1, newInitialChanges, window)
+			gridDrawer.drawDiff(grid1, newInitialChanges, window)
 
 		} else if window.JustPressed(pixelgl.KeyComma) {
-
-			if tickRate > 50*time.Millisecond {
-				ticker.Stop()
-				if tickRate/2 < 50*time.Millisecond {
-					tickRate = 50 * time.Millisecond
-				} else {
-					tickRate /= 2
-				}
-				ticker = time.NewTicker(tickRate)
-			}
+			ticker.Stop()
+			tickRate = minDuration(50*time.Millisecond, tickRate/2)
+			ticker = time.NewTicker(tickRate)
 
 		} else if window.JustPressed(pixelgl.KeyPeriod) {
 			ticker.Stop()
@@ -192,17 +186,17 @@ func run() {
 				changeLists = append(changeLists, changeList)
 				lastChangesIdx++
 
-				fmt.Printf("new last diff: %d\n", lastChangesIdx)
-
 				// swap the buffers so that grid1 has the new state
 				grid1, grid2 = grid2, grid1
 
-				gridDrawer.draw(grid1, changeList, window)
+				gridDrawer.drawDiff(grid1, changeList, window)
 			}
 		default:
 		}
 
 		window.Update()
+
+		atomic.AddUint64(&fps, 1)
 	}
 
 	if doTurnCalls == 0 {
@@ -216,6 +210,13 @@ func run() {
 	} else {
 		fmt.Printf("average draw time: %s\n", totalDrawTime/time.Duration(drawCalls))
 	}
+}
+
+func minDuration(a, b time.Duration) time.Duration {
+	if a < b {
+		return a
+	}
+	return b
 }
 
 // seedGrid seeds grid with alive cells that are a live at a rate of 1 / aliveRate
@@ -240,6 +241,9 @@ type gridDrawer struct {
 	// this picData is reused between draw calls
 	picData pixel.PictureData
 
+	windowWidth  int
+	windowHeight int
+
 	// cells in the grid that we are drawing
 	rows int
 	cols int
@@ -247,31 +251,32 @@ type gridDrawer struct {
 	cellWidthPixels  int
 	cellHeightPixels int
 
-	windowStride int
-
 	pixelsToNextRow int
 }
 
 // initializes the pixData of the drawer, the dimension fields must have been set at this point
 func (gd *gridDrawer) init() {
-	gd.picData.Pix = make([]color.RGBA, gd.rows*gd.cellHeightPixels*gd.cellWidthPixels*gd.cols)
+	monitorW, monitorH := pixelgl.PrimaryMonitor().Size()
+
+	gd.picData.Pix = make([]color.RGBA, int(monitorW)*int(monitorH))
 
 	fmt.Printf("total pixels: %d\n", len(gd.picData.Pix))
 
-	gd.windowStride = gd.cols * gd.cellWidthPixels
+	gd.windowWidth = gd.cols * gd.cellWidthPixels
+	gd.windowHeight = gd.rows * gd.cellHeightPixels
 
-	fmt.Printf("window stride: %d\n", gd.windowStride)
+	fmt.Printf("window stride: %d\n", gd.windowWidth)
 
-	gd.picData.Stride = gd.windowStride
+	gd.picData.Stride = gd.windowWidth
 
-	gd.pixelsToNextRow = gd.windowStride * gd.cellHeightPixels
+	gd.pixelsToNextRow = gd.windowWidth * gd.cellHeightPixels
 
 	fmt.Printf("pixels to next row: %d\n", gd.pixelsToNextRow)
 
 	gd.picData.Rect = pixel.Rect{
 		Max: pixel.Vec{
-			X: float64(gd.windowStride),
-			Y: float64(gd.rows * gd.cellHeightPixels),
+			X: float64(gd.windowWidth),
+			Y: float64(gd.windowHeight),
 		},
 	}
 }
@@ -282,7 +287,7 @@ var drawCalls int
 // draws all the changes in changeList to window
 // drawing is done based on diffs because it saves a lot of iterations and the previous state stays drawn to the screen
 // so only cells that changed need to have their color changed
-func (gd *gridDrawer) draw(gridRows [][]bool, changeList []cellDiff, window *pixelgl.Window) {
+func (gd *gridDrawer) drawDiff(gridRows [][]bool, changeList []cellDiff, window *pixelgl.Window) {
 	drawCalls++
 	defer func(start time.Time) {
 		totalDrawTime += time.Since(start)
@@ -299,7 +304,7 @@ func (gd *gridDrawer) draw(gridRows [][]bool, changeList []cellDiff, window *pix
 		}
 
 		for down := 0; down < gd.cellHeightPixels; down++ {
-			downOffset := down * gd.windowStride
+			downOffset := down * gd.windowWidth
 
 			for right := 0; right < gd.cellWidthPixels; right++ {
 
@@ -312,6 +317,71 @@ func (gd *gridDrawer) draw(gridRows [][]bool, changeList []cellDiff, window *pix
 	sprite := pixel.NewSprite(&gd.picData, gd.picData.Bounds())
 
 	sprite.Draw(window, pixel.IM.Moved(window.Bounds().Center()))
+}
+
+// recalculates gd's fields necessary to draw to window if the window's size is different from the gd's fields
+//
+func (gd *gridDrawer) maybeReconfigure(window *pixelgl.Window) bool {
+	// potential resize
+	bounds := window.Bounds()
+
+	windowWidth := int(bounds.Max.X - bounds.Min.Y)
+	windowHeight := int(bounds.Max.Y - bounds.Min.Y)
+
+	var changed bool
+
+	if gd.windowWidth != windowWidth {
+		changed = true
+
+		gd.pixelsToNextRow = windowWidth * gd.cellHeightPixels
+
+		gd.windowWidth = windowWidth
+		gd.picData.Stride = windowWidth
+
+		gd.cellWidthPixels = windowWidth / gd.cols
+
+		gd.picData.Rect.Max.X = float64(windowWidth)
+	}
+
+	if gd.windowHeight != windowHeight {
+		changed = true
+
+		gd.windowHeight = windowHeight
+
+		gd.cellHeightPixels = windowHeight / gd.rows
+
+		gd.pixelsToNextRow = gd.windowWidth * gd.cellHeightPixels
+
+		gd.picData.Rect.Max.Y = float64(windowHeight)
+	}
+
+	return changed
+}
+
+// draws a full grid to window
+func (gd *gridDrawer) drawGrid(grid [][]bool, window *pixelgl.Window) {
+	for rowNum, row := range grid {
+		for colNum, cell := range row {
+			cellUpperLeftPixel := rowNum*gd.pixelsToNextRow + colNum*gd.cellWidthPixels
+
+			var cellColor color.RGBA
+			if cell {
+				cellColor = colornames.Black
+			} else {
+				cellColor = colornames.White
+			}
+
+			for down := 0; down < gd.cellHeightPixels; down++ {
+				downOffset := down * gd.windowWidth
+
+				for right := 0; right < gd.cellWidthPixels; right++ {
+
+					gd.picData.Pix[cellUpperLeftPixel+right+downOffset] = cellColor
+
+				}
+			}
+		}
+	}
 }
 
 var totalDoTurnTime time.Duration
