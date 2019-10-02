@@ -104,6 +104,12 @@ func run() {
 		}
 	}()
 
+	previousStateC := make(chan [][]bool)
+
+	nextStateC := asyncDoTurn(previousStateC)
+
+	previousStateC <- grid
+
 	for !window.Closed() {
 
 		// handle possible resizing of window
@@ -176,7 +182,9 @@ func run() {
 		select {
 		case <-ticker.C:
 			if !paused {
-				newGrid := doTurn(grid)
+				newGrid := <-nextStateC
+
+				previousStateC <- newGrid
 
 				changes := determineChanges(grid, newGrid)
 
@@ -206,6 +214,19 @@ func run() {
 	} else {
 		fmt.Printf("average draw time: %s\n", totalDrawTime/time.Duration(drawCalls))
 	}
+}
+
+// asyncDoTurn returns a channel over which it will return the next state
+func asyncDoTurn(prevStateC <-chan [][]bool) <-chan [][]bool {
+	out := make(chan [][]bool)
+
+	go func() {
+		for grid := range prevStateC {
+			out <- doTurn(grid)
+		}
+	}()
+
+	return out
 }
 
 // seedGrid seeds grid with alive cells that are a live at a rate of 1 / aliveRate
